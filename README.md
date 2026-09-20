@@ -37,6 +37,12 @@ Open `http://localhost:3000`.
   text parser is a best-effort heuristic over whatever text a PDF's text
   layer (or a pasted statement) contains, and won't extract anything from
   a scanned/image-only PDF (no OCR).
+- **Password-protected PDFs are supported** — very common for Indian bank
+  statements (typically locked with your PAN or date of birth). If a
+  password is needed, the UI prompts for it inline (`PdfPasswordError` in
+  `lib/spend-analyzer/pdf.ts`, distinguishing "none tried yet" from "wrong
+  password"); the password is used only in-browser to open the file and is
+  never sent anywhere, same as the statement contents.
 - Not built (P1/P2, future work): subscription audit view, budget vs.
   actual tracking, merchant-level drill-down, savings-rate tracking,
   what-if simulator, bill-negotiation nudges, goal-linked tracking, and

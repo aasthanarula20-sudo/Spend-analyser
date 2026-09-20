@@ -37,6 +37,7 @@ const SAMPLE_PASTED_TEXT = `01/02/2024 SWIGGY ORDER 8213           320.00 Dr   1
 `;
 
 type Source = { kind: "csv"; text: string } | { kind: "text"; text: string };
+type PasswordPrompt = { file: File; reason: "needed" | "incorrect" };
 
 export default function SpendAnalyzerPage() {
   const [fileName, setFileName] = useState<string | null>(null);
@@ -45,6 +46,8 @@ export default function SpendAnalyzerPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AnalysisResult | null>(null);
+  const [passwordPrompt, setPasswordPrompt] = useState<PasswordPrompt | null>(null);
+  const [passwordInput, setPasswordInput] = useState("");
 
   function runAnalysis(next: Source) {
     setError(null);
@@ -58,25 +61,57 @@ export default function SpendAnalyzerPage() {
     }
   }
 
+  async function extractAndAnalyzePdf(file: File, password?: string) {
+    const { extractPdfText, PdfPasswordError } = await import("@/lib/spend-analyzer/pdf");
+    try {
+      const text = await extractPdfText(file, password);
+      if (!text.trim()) {
+        throw new Error("Could not extract any text from this PDF — it may be a scanned/image-only statement.");
+      }
+      setPasswordPrompt(null);
+      setPasswordInput("");
+      runAnalysis({ kind: "text", text });
+    } catch (err) {
+      if (err instanceof PdfPasswordError) {
+        // Most Indian bank statements are locked with your PAN or date of
+        // birth as the password — ask for it instead of just failing.
+        setPasswordPrompt({ file, reason: err.reason });
+        setResult(null);
+        return;
+      }
+      throw err;
+    }
+  }
+
   async function handleFile(file: File) {
     setFileName(file.name);
     setLoading(true);
     setError(null);
+    setPasswordPrompt(null);
     try {
       const lowerName = file.name.toLowerCase();
       if (lowerName.endsWith(".csv") || file.type === "text/csv") {
         const text = await file.text();
         runAnalysis({ kind: "csv", text });
       } else if (lowerName.endsWith(".pdf") || file.type === "application/pdf") {
-        const { extractPdfText } = await import("@/lib/spend-analyzer/pdf");
-        const text = await extractPdfText(file);
-        if (!text.trim()) {
-          throw new Error("Could not extract any text from this PDF — it may be a scanned/image-only statement.");
-        }
-        runAnalysis({ kind: "text", text });
+        await extractAndAnalyzePdf(file);
       } else {
         throw new Error("Unsupported file type. Upload a .csv or .pdf statement, or paste statement text below.");
       }
+    } catch (err) {
+      setResult(null);
+      setError((err as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function submitPassword() {
+    if (!passwordPrompt) return;
+    setLoading(true);
+    setError(null);
+    try {
+      await extractAndAnalyzePdf(passwordPrompt.file, passwordInput);
     } catch (err) {
       setResult(null);
       setError((err as Error).message);
@@ -109,6 +144,47 @@ export default function SpendAnalyzerPage() {
           </label>
           {loading && <p className="text-xs text-slate-500 mb-2">Reading {fileName}…</p>}
           {!loading && fileName && source && <p className="text-xs text-slate-400 mb-2">Loaded: {fileName}</p>}
+
+          {passwordPrompt && (
+            <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3">
+              <p className="text-sm text-amber-900 mb-2">
+                {passwordPrompt.reason === "incorrect"
+                  ? "That password didn't work — try again."
+                  : "This PDF is password-protected."}{" "}
+                {passwordPrompt.reason !== "incorrect" && (
+                  <span className="text-amber-700">
+                    Indian bank statements are commonly locked with your PAN or date of birth (e.g.{" "}
+                    <span className="font-mono">DDMMYYYY</span>).
+                  </span>
+                )}
+              </p>
+              <div className="flex gap-2">
+                <input
+                  type="password"
+                  value={passwordInput}
+                  onChange={(e) => setPasswordInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && passwordInput) void submitPassword();
+                  }}
+                  placeholder="PDF password"
+                  className="flex-1 border border-amber-300 rounded-md px-2 py-1.5 text-sm bg-white text-slate-900"
+                  autoFocus
+                />
+                <button
+                  type="button"
+                  onClick={() => void submitPassword()}
+                  disabled={!passwordInput || loading}
+                  className="inline-flex items-center justify-center rounded-md bg-slate-900 px-4 py-1.5 text-white text-sm font-medium hover:bg-slate-800 transition-colors disabled:opacity-40"
+                >
+                  Unlock
+                </button>
+              </div>
+              <p className="text-xs text-amber-700 mt-2">
+                The password stays in your browser like everything else here — it&apos;s only used locally to open the
+                PDF, never sent anywhere.
+              </p>
+            </div>
+          )}
           <button
             type="button"
             onClick={() => {
@@ -162,7 +238,8 @@ export default function SpendAnalyzerPage() {
             CSV: expects a header row with Date + Description/Narration columns, and either an Amount column
             (negative = debit) or separate Debit/Credit columns. PDF and pasted text: each transaction line needs a
             date and an amount — a &quot;Dr&quot;/&quot;Cr&quot; marker on the amount helps distinguish spend from
-            income. A scanned/image-only PDF has no extractable text and won&apos;t work.
+            income. A scanned/image-only PDF has no extractable text and won&apos;t work. A password-protected PDF
+            will prompt for the password above — it&apos;s used only in your browser to open the file.
           </p>
         </div>
 
